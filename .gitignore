@@ -1,0 +1,39 @@
+# Build artifacts
+/target/
+
+# Local configuration and credentials — NEVER commit (contains real secrets)
+.env
+.env.*
+!.env.example
+config.toml
+config.local.toml
+*.local.toml
+/auth/
+/auths/
+lobsterai-*.json
+*.info
+
+# Runtime state
+runtime-state.json
+state.json
+
+# Logs
+/logs/
+*.log
+*.jsonl
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary agent scratch files
+_agents*
+_listing*
+_slice*
+_state*
+_ref*
+_allfiles*
+_tmp*
+*.preview
