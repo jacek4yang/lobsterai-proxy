@@ -106,8 +106,8 @@ impl IntoResponse for ApiError {
     }
 }
 
-impl From<crate::upstream_stub::ApiFailure> for ApiError {
-    fn from(failure: crate::upstream_stub::ApiFailure) -> Self {
+impl From<crate::lobsterai::upstream::ApiFailure> for ApiError {
+    fn from(failure: crate::lobsterai::upstream::ApiFailure) -> Self {
         let mut error = ApiError::new(failure.status, failure.kind, failure.message);
         error.retry_after_secs = failure.retry_after_secs;
         error

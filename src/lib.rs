@@ -11,7 +11,6 @@ pub mod server;
 pub mod session;
 pub mod shutdown;
 pub mod stream_watch;
-pub mod upstream_stub;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
