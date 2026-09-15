@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
         }
         Command::Status => {
             let state = lobsterai_proxy::server::build_state(config)?;
-            lobsterai_proxy::server::print_status(&state);
+            lobsterai_proxy::server::print_status(&state).await;
             Ok(())
         }
         Command::Serve { host, port } => {

@@ -1185,11 +1185,12 @@ pub fn build_state(config: crate::config::Config) -> Result<AppState, anyhow::Er
 }
 
 /// Human-readable status for the `status` subcommand (no secrets).
-pub fn print_status(state: &AppState) {
+pub async fn print_status(state: &AppState) {
     let accounts = state.pool.snapshot(&state.config.model.default);
     println!("model      : {}", state.config.model.default);
     println!("auth dir   : {}", state.config.auth.dir.display());
     println!("accounts   : {}", accounts.len());
+    let http = crate::lobsterai::upstream::build_client(&state.config.upstream);
     for account in accounts {
         println!(
             "  - {} healthy={} credits={} token_expires_at_secs={}",
@@ -1207,9 +1208,26 @@ pub fn print_status(state: &AppState) {
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0),
         );
+        let Some(credential) = account
+            .get("name")
+            .and_then(|v| v.as_str())
+            .and_then(|name| state.pool.credential_by_safe_name(name))
+        else {
+            continue;
+        };
+        match crate::lobsterai::checkin::fetch_invite_progress(
+            &http,
+            &state.config.upstream.base_url,
+            &credential,
+            true,
+        )
+        .await
+        {
+            Ok(progress) => println!("      {}", progress.summary()),
+            Err(err) => println!("      invitation unavailable: {err}"),
+        }
     }
 }
-
 /// Start the proxy server with graceful shutdown and background housekeeping.
 pub async fn serve(config: crate::config::Config) -> Result<(), anyhow::Error> {
     use anyhow::Context as _;
