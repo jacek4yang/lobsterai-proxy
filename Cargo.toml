@@ -1,0 +1,48 @@
+[package]
+name = "lobsterai-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "Local Anthropic + OpenAI Responses API proxy for NetEase Youdao LobsterAI, multi-account pool with auto check-in, exclusive deepseek-v4.1-flash"
+license = "MIT"
+repository = "https://github.com/jacek4yang/lobsterai-proxy"
+readme = "README.md"
+keywords = ["anthropic", "claude", "proxy", "deepseek", "lobsterai"]
+categories = ["development-tools", "network-programming"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "http2",
+    "charset",
+    "json",
+    "stream",
+    "gzip",
+    "socks",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
+bytes = "1"
+futures-util = "0.3"
+thiserror = "2"
+anyhow = "1"
+secrecy = "0.10"
+zeroize = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.11"
+hmac = "0.13"
+toml = "1"
+base64 = "0.23"
+rand = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[workspace]
