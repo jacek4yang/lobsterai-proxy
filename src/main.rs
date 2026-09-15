@@ -16,7 +16,8 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Command::Login { no_browser } => {
-            anyhow::bail!("login arrives in a later PR (no_browser={no_browser})");
+            lobsterai_proxy::lobsterai::oauth::run_login(&config, !*no_browser).await?;
+            Ok(())
         }
         Command::Status => {
             let state = lobsterai_proxy::server::build_state(config)?;
