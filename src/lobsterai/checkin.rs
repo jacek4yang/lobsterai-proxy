@@ -256,6 +256,108 @@ pub async fn fetch_credits(
     Ok(credits)
 }
 
+/// Invite-program progress: the account's own invitation code (generated
+/// lazily upstream on first `POST /api/invitation/code`) plus the stage
+/// rewards. The code is what the user shares; friends registering with it
+/// earn the account credits (3 invites -> +1000, 10 -> +3000).
+#[derive(Debug, Clone)]
+pub struct InviteProgress {
+    pub invitation_code: Option<String>,
+    pub invited_count: u64,
+    pub stage1_threshold: u64,
+    pub stage1_completed: bool,
+    pub stage1_reward_credits: f64,
+    pub stage2_threshold: u64,
+    pub stage2_completed: bool,
+    pub stage2_reward_credits: f64,
+    pub per_invite_reward_credits: f64,
+    pub total_reward_credits: f64,
+}
+
+impl InviteProgress {
+    /// Human-readable one-liner for the CLI (no secrets).
+    pub fn summary(&self) -> String {
+        let code = self
+            .invitation_code
+            .clone()
+            .unwrap_or_else(|| "(not generated yet)".into());
+        format!(
+            "invite code: {code} | invited: {} | rewards: {}+{} pts earned (stage1 {}@{}, stage2 {}@{}, {} per invite)",
+            self.invited_count,
+            self.total_reward_credits,
+            if self.stage1_completed && self.stage2_completed { 1900 } else { 0 },
+            self.stage1_completed,
+            self.stage1_threshold,
+            self.stage2_completed,
+            self.stage2_threshold,
+            self.per_invite_reward_credits,
+        )
+    }
+}
+
+/// Fetch (and lazily create) the account's invitation code + progress.
+/// `generate` mirrors the portal: when the progress reports no code yet,
+/// POST /api/invitation/code once to create it, then re-read the progress.
+pub async fn fetch_invite_progress(
+    http: &reqwest::Client,
+    base_url: &str,
+    credential: &Credential,
+    generate: bool,
+) -> Result<InviteProgress, ApiError> {
+    let parse = |data: &Value| -> Result<InviteProgress, ApiError> {
+        let num = |key: &str| data.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+        Ok(InviteProgress {
+            invitation_code: data
+                .get("invitationCode")
+                .and_then(Value::as_str)
+                .filter(|c| !c.is_empty())
+                .map(ToOwned::to_owned),
+            invited_count: data
+                .get("invitedCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            stage1_threshold: data
+                .get("stage1Threshold")
+                .and_then(Value::as_u64)
+                .unwrap_or(3),
+            stage1_completed: data
+                .get("stage1Completed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            stage1_reward_credits: num("stage1RewardCredits"),
+            stage2_threshold: data
+                .get("stage2Threshold")
+                .and_then(Value::as_u64)
+                .unwrap_or(10),
+            stage2_completed: data
+                .get("stage2Completed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            stage2_reward_credits: num("stage2RewardCredits"),
+            per_invite_reward_credits: num("perInviteRewardCredits"),
+            total_reward_credits: num("totalRewardCredits"),
+        })
+    };
+    let url = format!("{base_url}/api/invitation/progress");
+    let data = get_json(http, &url, credential)
+        .await
+        .map_err(|e| ApiError::upstream(502, crate::redaction::sanitize_text(&e, &[])))?;
+    let mut progress = parse(&data)?;
+    if progress.invitation_code.is_none() && generate {
+        // Idempotent upstream: creates the code on first call, returns the
+        // same code afterwards.
+        let create_url = format!("{base_url}/api/invitation/code");
+        post_json(http, &create_url, credential, json!({}))
+            .await
+            .map_err(|e| ApiError::upstream(502, crate::redaction::sanitize_text(&e, &[])))?;
+        let data = get_json(http, &url, credential)
+            .await
+            .map_err(|e| ApiError::upstream(502, crate::redaction::sanitize_text(&e, &[])))?;
+        progress = parse(&data)?;
+    }
+    Ok(progress)
+}
+
 /// Check in every healthy account, record results, and refresh learned
 /// credits in the pool. Called by the housekeeping loop.
 pub async fn checkin_all(pool: &Arc<super::pool::Pool>, http: &reqwest::Client, base_url: &str) {
@@ -296,6 +398,20 @@ pub async fn checkin_all(pool: &Arc<super::pool::Pool>, http: &reqwest::Client, 
         // Refresh learned credits (drives highest-credits-first selection).
         if let Ok(credits) = fetch_credits(http, base_url, &credential).await {
             pool.set_credits(&credential.uid(), credits as i64);
+        }
+        // Surface the account's invitation code + progress (code is what the
+        // user shares to earn credits; generation is lazy/idempotent).
+        match fetch_invite_progress(http, base_url, &credential, true).await {
+            Ok(progress) => {
+                tracing::info!(
+                    credential = %credential.safe_name,
+                    invite = %progress.summary(),
+                    "invitation status"
+                );
+            }
+            Err(err) => {
+                tracing::debug!(credential = %credential.safe_name, error = %err, "invitation status unavailable");
+            }
         }
     }
 }

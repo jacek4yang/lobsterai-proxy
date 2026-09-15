@@ -385,7 +385,46 @@ pub async fn run_login(config: &Config, open_browser_flag: bool) -> Result<PathB
         parsed.nickname,
         parsed.uid.len()
     );
+
+    // Surface this account's invite code + progress (lazily generated
+    // upstream on first use; failure is non-fatal for the login flow).
+    match fetch_invite_summary(config, &path).await {
+        Ok(text) => {
+            println!("Invitation: {text}");
+        }
+        Err(err) => {
+            println!("Invitation status unavailable: {err}");
+        }
+    }
     Ok(path)
+}
+
+/// Load the just-saved credential and fetch its invite code summary
+/// (generating the code on first use).
+async fn fetch_invite_summary(config: &Config, path: &std::path::Path) -> Result<String, String> {
+    let data = super::credential::read_credential_file(path).map_err(|e| e.to_string())?;
+    let server_secret = config.server_secret();
+    let credential = super::credential::Credential::new(path.to_path_buf(), data, &server_secret);
+    let http = Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let progress = crate::lobsterai::checkin::fetch_invite_progress(
+        &http,
+        &config.upstream.base_url,
+        &credential,
+        true,
+    )
+    .await
+    .map_err(|e| e.message)?;
+    let mut text = progress.summary();
+    if let Some(code) = &progress.invitation_code {
+        text.push_str(&format!(
+            "\nShare link: {}/portal#/login?inviteCode={code}",
+            config.upstream.login_portal
+        ));
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
