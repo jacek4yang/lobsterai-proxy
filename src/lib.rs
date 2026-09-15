@@ -1,11 +1,14 @@
 #![allow(clippy::result_large_err)]
 
+pub mod anthropic;
 pub mod cli;
 pub mod config;
+pub mod deepseek;
 pub mod error;
 pub mod lobsterai;
 pub mod models;
 pub mod observability;
+pub mod reasoning_shadow;
 pub mod redaction;
 pub mod server;
 pub mod session;
