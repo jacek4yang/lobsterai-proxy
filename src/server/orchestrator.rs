@@ -1248,27 +1248,21 @@ pub async fn serve(config: crate::config::Config) -> Result<(), anyhow::Error> {
     let serve_shutdown = shutdown_tx.subscribe();
     std::mem::drop(_shutdown_rx);
 
-    // Background housekeeping (refresh-due + daily check-in/credits) —
-    // wired in the check-in PR; the pool refreshes lazily on demand until then.
-    let housekeep_pool = state.pool.clone();
-    let housekeep_http = state.http.clone();
-    let base_url = state.config.upstream.base_url.clone();
-    let margin = state.config.limits.refresh_margin_secs as i64;
-    let keepalive = state.config.limits.keepalive_secs;
-    let _housekeep_task = tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(60));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tick.tick().await;
-            housekeep_pool.prune();
-            let files = crate::lobsterai::pool::list_credential_files(&housekeep_pool_auth_dir());
-            housekeep_pool.load_files(&files);
-            housekeep_pool
-                .refresh_due(&housekeep_http, &base_url, margin, keepalive, None)
-                .await;
-        }
-    });
-    let _ = &housekeep_shutdown;
+    // Background housekeeping: auth-dir rescan + refresh-due every minute,
+    // plus the daily check-in / credit refresh on its own schedule (the first
+    // pass runs ~30 s after startup; upstream check-in is idempotent per day).
+    crate::lobsterai::housekeep::spawn(
+        state.pool.clone(),
+        state.http.clone(),
+        state.config.upstream.base_url.clone(),
+        state.config.auth.dir.clone(),
+        state.config.limits.refresh_margin_secs as i64,
+        state.config.limits.keepalive_secs,
+        state.config.checkin,
+        Duration::from_secs(30),
+        state.metrics.clone(),
+        housekeep_shutdown,
+    );
 
     let addr = format!("{}:{}", state.config.server.host, state.config.server.port);
     let app = router(state.clone());
@@ -1301,12 +1295,4 @@ pub async fn serve(config: crate::config::Config) -> Result<(), anyhow::Error> {
     .await;
     tracing::info!(?outcome, "server stopped");
     Ok(())
-}
-
-/// Auth dir for the refresh loop: read from the config captured by serve.
-/// (The loop task captures only the pool; the auth dir lives on the config.)
-fn housekeep_pool_auth_dir() -> std::path::PathBuf {
-    std::env::var("LOBSTERAI_AUTH_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("auth"))
 }
