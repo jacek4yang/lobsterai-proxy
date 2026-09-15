@@ -1,0 +1,65 @@
+# lobsterai-proxy configuration (copy to config.toml and edit as needed)
+# All keys are optional; missing keys fall back to these example values.
+
+[server]
+host = "127.0.0.1"
+port = 8090
+# Local API key. MUST be set when host is a non-loopback address.
+# Claude Code sends it as `x-api-key` or `Authorization: Bearer <key>`;
+# Grok Build sends `Authorization: Bearer <key>`.
+api_key = ""
+
+[model]
+# The single model this proxy serves.
+default = "deepseek-v4.1-flash"
+
+[upstream]
+# LobsterAI backend origin.
+base_url = "https://lobsterai-server.youdao.com"
+# LobsterAI login portal (browser OAuth).
+login_portal = "https://lobsterai.youdao.com"
+# Optional outbound proxy (deterministic direct when empty; environment
+# proxy variables are deliberately ignored).
+# proxy = "socks5h://127.0.0.1:10808"
+connect_timeout_secs = 15
+
+[auth]
+# Credential/state directory. Default: `auth/` next to the executable
+# (portable deployment); override with LOBSTERAI_AUTH_DIR.
+# dir = "auth"
+# Read-only directories to seed credentials from (copied into `dir`,
+# never written back).
+seed_dirs = []
+
+[timeouts]
+# Stream watchdog: upstream first event / first semantic delta / byte idle /
+# semantic idle limits (pings never count as progress).
+first_event_secs = 90
+first_semantic_secs = 240
+stream_idle_secs = 120
+semantic_idle_secs = 300
+
+[limits]
+shadow_max_sessions = 256      # reasoning shadow session bound
+shadow_ttl_secs = 600          # reasoning shadow TTL (10 min)
+sticky_ttl_secs = 1800         # session->account stickiness idle TTL
+sticky_max = 512               # sticky table capacity
+cred_cooldown_secs = 300       # cooldown after 401/403
+hard_credit_cooldown_secs = 43200  # out-of-credits cooldown (12 h)
+model_cooldown_secs = 600      # 429 fallback cooldown
+model_cooldown_max_secs = 86400
+refresh_margin_secs = 600      # refresh this long before expiresAt
+keepalive_secs = 86400         # daily keepalive refresh interval
+max_body_bytes = 104857600
+
+[checkin]
+enabled = true                 # daily check-in (+100 credits) + credit refresh
+interval_secs = 3600
+
+# Log level (tracing filter). Environment RUST_LOG overrides it.
+log_level = "info"
+
+# Optional fixed server secret (hex) for HMAC fingerprints of sessions and
+# account names. Leave unset to generate one per process (fingerprints
+# become restart-unstable).
+# secret = "00112233445566778899aabbccddeeff"
