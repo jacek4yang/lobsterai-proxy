@@ -4,5 +4,6 @@
 //! there is no replay, no failover, no regeneration.
 
 mod orchestrator;
+mod responses_pump;
 
 pub use orchestrator::{build_state, print_status, router, serve, AppState};

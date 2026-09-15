@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::responses_pump::{aggregate_responses, responses_stream_response};
 use crate::anthropic::request::convert_request;
 use crate::anthropic::stream::StreamConverter;
 use crate::anthropic::types as atypes;
@@ -24,6 +25,7 @@ use crate::lobsterai::upstream::{self, GenerateOutcome, StartedGeneration};
 pub(crate) use crate::observability::InFlightGuard;
 use crate::observability::{log_request_summary, Metrics, RequestSummary};
 use crate::reasoning_shadow::ReasoningShadowStore;
+use crate::responses::request as responses_request;
 use crate::session;
 use crate::stream_watch::StreamTimeouts;
 
@@ -48,6 +50,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(count_tokens))
+        .route("/v1/responses", post(responses))
         .route("/v1/models", get(models))
         .route("/metrics", get(metrics))
         .route("/healthz", get(healthz))
@@ -407,6 +410,263 @@ async fn messages(
 fn parse_client_app(user_agent: &str) -> Option<&str> {
     let app = user_agent.split_whitespace().next()?;
     (!app.is_empty()).then_some(app)
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses API frontend (Grok Build)
+// ---------------------------------------------------------------------------
+
+/// `POST /v1/responses` — OpenAI Responses API frontend. Same authentication,
+/// account pool, quota handling, retry invariants, watchdog, metrics, and
+/// reasoning shadow as `/v1/messages`; only the protocol conversion differs.
+///
+/// Session affinity precedence: `prompt_cache_key` (Grok Build's sticky
+/// routing key), `x-grok-conv-id`, then the generic fallbacks. The raw key is
+/// fingerprinted with the server secret before any use — never logged.
+async fn responses(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: Request,
+) -> Response {
+    if let Err(err) = check_auth(&state, &headers) {
+        return err.into_response();
+    }
+    let (raw_body, error) = read_json_body(request, state.config.limits.max_body_bytes).await;
+    if let Some(err) = error {
+        state.metrics.record_error();
+        return err.into_response();
+    }
+    state
+        .metrics
+        .record_bytes_in(serde_json::to_vec(&raw_body).map(|b| b.len()).unwrap_or(0) as u64);
+    let started_at = Instant::now();
+    let request_id = session::request_id();
+    let client_stream = raw_body
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    state.metrics.record_request(client_stream);
+    let in_flight = InFlightGuard::new(state.metrics.clone(), client_stream);
+
+    // --- session identity (fingerprinted; raw key never logged) ---
+    let raw_session = extract_responses_session(&raw_body, &headers);
+    let session_fp = raw_session.as_deref().map(|raw| {
+        // Responses keys are distinct from Anthropic session ids; a domain
+        // tag keeps the two frontends' fingerprints from colliding.
+        session::fingerprint_domain(&state.server_secret, b"responses/v1", raw)
+    });
+
+    // --- convert Responses → OpenAI chat ---
+    let default_model = state.config.model.default.clone();
+    let converted = match responses_request::convert_request(&raw_body, &default_model) {
+        Ok(converted) => converted,
+        Err(err) => {
+            state.metrics.record_error();
+            let mut api_error = ApiError::invalid_request(err.message);
+            api_error.request_id = Some(request_id);
+            drop(in_flight);
+            return openai_error_response(&api_error);
+        }
+    };
+
+    // --- deepseek-v4.1-flash policy (shared with the Anthropic frontend) ---
+    let mut chat_body = converted.chat_body.clone();
+    if let Some(fp) = &session_fp {
+        state
+            .shadow
+            .restore_into(chat_body.as_object_mut().unwrap(), fp);
+    }
+    let (historical_reasoning_removed, canonicalized_args) = {
+        let object = chat_body.as_object_mut().expect("chat body is an object");
+        let removed = crate::deepseek::policy::strip_historical_reasoning(object);
+        let canonicalized = crate::deepseek::policy::canonicalize_tool_arguments(object);
+        (removed, canonicalized)
+    };
+    let (prefix_hash, prefix_bytes) = {
+        let object = chat_body.as_object().expect("chat body is an object");
+        crate::deepseek::policy::stable_prefix_hash(object)
+    };
+    let request_bytes = serde_json::to_string(&chat_body)
+        .map(|s| s.len())
+        .unwrap_or(0);
+
+    tracing::debug!(
+        request_id = %request_id,
+        session = session_fp.as_deref().unwrap_or("none"),
+        prefix_hash = %prefix_hash,
+        prefix_bytes,
+        canonicalized_args,
+        historical_reasoning_removed,
+        "prefix telemetry (responses)"
+    );
+
+    // --- generation (retry invariants enforced inside) ---
+    let outcome = upstream::generate(
+        &state.pool,
+        &state.http,
+        &state.config,
+        session_fp.as_deref(),
+        &chat_body,
+        &state.metrics,
+    )
+    .await;
+    let started_generation = match outcome {
+        GenerateOutcome::Started(started) => *started,
+        GenerateOutcome::Failed(failure) => {
+            state.metrics.record_error();
+            state
+                .metrics
+                .request_duration_seconds
+                .observe_ms(started_at.elapsed().as_millis());
+            let mut api_error = ApiError::from(failure);
+            api_error.request_id = Some(request_id.clone());
+            log_summary_error(
+                &state,
+                &request_id,
+                session_fp.as_deref(),
+                &api_error,
+                started_at,
+                request_bytes,
+            );
+            drop(in_flight);
+            return openai_error_response(&api_error);
+        }
+    };
+    state
+        .metrics
+        .record_failover(started_generation.failover_count);
+
+    let model = if started_generation.model.is_empty() {
+        state.config.model.default.clone()
+    } else {
+        started_generation.model.clone()
+    };
+    let client = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_client_app)
+        .map(str::to_owned);
+    let mut summary = RequestSummary {
+        request_id: request_id.clone(),
+        session: session_fp.clone(),
+        model: model.clone(),
+        credential: Some(started_generation.credential.safe_name.clone()),
+        stream: client_stream,
+        http_status: 200,
+        request_bytes,
+        failovers: started_generation.failover_count,
+        refresh_retry: started_generation.refresh_retry,
+        client,
+        ..RequestSummary::default()
+    };
+
+    if client_stream {
+        return responses_stream_response(
+            &state,
+            model,
+            converted.thinking_requested,
+            session_fp.clone(),
+            started_at,
+            &mut summary,
+            in_flight,
+            started_generation.response,
+            state.metrics.clone(),
+        );
+    }
+
+    // --- non-stream: ONE upstream stream aggregated locally ---
+    let result = aggregate_responses(
+        model,
+        converted.thinking_requested,
+        state.timeouts,
+        state.shadow.clone(),
+        session_fp.clone(),
+        started_at,
+        &mut summary,
+        &state.metrics,
+        started_generation.response,
+    )
+    .await;
+    summary.duration_ms = started_at.elapsed().as_millis();
+    summary.http_status = if result.is_err() { 502 } else { 200 };
+    state.metrics.record_tokens(
+        summary.input_tokens,
+        summary.output_tokens,
+        summary.cached_tokens,
+    );
+    state.metrics.record_latencies(&summary);
+    log_request_summary(&summary);
+    drop(in_flight);
+    match result {
+        Ok(response) => {
+            state.metrics.record_ok();
+            Json(response).into_response()
+        }
+        Err(err) => {
+            state.metrics.record_error();
+            let mut api_error = err;
+            api_error.request_id = Some(request_id);
+            openai_error_response(&api_error)
+        }
+    }
+}
+
+/// Raw Responses session identity, in priority order:
+/// 1. `prompt_cache_key` — Grok Build's sticky routing key;
+/// 2. `x-grok-conv-id` / `x-grok-session-id` headers;
+/// 3. `session_id` / `user_id` request metadata (generic fallback).
+///
+/// The returned raw value is fingerprinted by the caller before any use.
+fn extract_responses_session(request: &Value, headers: &HeaderMap) -> Option<String> {
+    let from_body = request
+        .get("prompt_cache_key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(key) = from_body {
+        return Some(key);
+    }
+    for header in ["x-grok-conv-id", "x-grok-session-id"] {
+        if let Some(value) = headers
+            .get(header)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            return Some(value.to_owned());
+        }
+    }
+    let metadata = request.get("metadata")?.as_object()?;
+    metadata
+        .get("session_id")
+        .and_then(Value::as_str)
+        .or_else(|| metadata.get("user_id").and_then(Value::as_str))
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// OpenAI-flavored error envelope for the Responses frontend (the Anthropic
+/// envelope would fail Grok Build's error parser).
+fn openai_error_response(api_error: &ApiError) -> Response {
+    let mut body = json!({
+        "error": {
+            "message": api_error.message,
+            "type": api_error.kind,
+            "code": api_error.kind,
+        }
+    });
+    if let Some(rid) = &api_error.request_id {
+        body["error"]["request_id"] = json!(rid);
+    }
+    let status =
+        StatusCode::from_u16(api_error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut response = (status, Json(body)).into_response();
+    if let Some(secs) = api_error.retry_after_secs {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&secs.max(0).to_string()) {
+            response.headers_mut().insert("retry-after", value);
+        }
+    }
+    response
 }
 
 fn log_summary_error(

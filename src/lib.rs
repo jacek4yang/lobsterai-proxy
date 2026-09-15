@@ -10,6 +10,7 @@ pub mod models;
 pub mod observability;
 pub mod reasoning_shadow;
 pub mod redaction;
+pub mod responses;
 pub mod server;
 pub mod session;
 pub mod shutdown;
