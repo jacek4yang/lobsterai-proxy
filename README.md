@@ -6,7 +6,7 @@ A local, single-binary Rust proxy that exposes the **Anthropic Messages API**
 (for [Claude Code](https://claude.com/claude-code)) and the **OpenAI Responses
 API** (for [Grok Build](https://github.com/xai-org/grok-build)) and translates
 both to the **NetEase Youdao LobsterAI** backend, proxying **exclusively
-`deepseek-v4.1-flash`**.
+`deepseek-flash`**.
 
 ```
 Claude Code                      Grok Build
@@ -16,7 +16,7 @@ Claude Code                      Grok Build
 lobsterai-proxy  (this project, localhost)
    │ OpenAI Chat Completions (SSE, multi-account pool)
    ▼
-LobsterAI backend  →  deepseek-v4.1-flash
+LobsterAI backend  →  deepseek-flash
 ```
 
 ## Features
@@ -36,7 +36,7 @@ LobsterAI backend  →  deepseek-v4.1-flash
 - **OpenAI Responses API** — `POST /v1/responses` for Grok Build: full
   streaming event lifecycle, tool-call round-tripping with stable call ids,
   reasoning, usage.
-- **Single model by design** — everything is tuned for `deepseek-v4.1-flash`;
+- **Single model by design** — everything is tuned for `deepseek-flash`;
   other client-requested model ids map to it.
 - **Hardening** — tokens live in `SecretString`, unified log/error redaction,
   client headers never forwarded upstream, local API key enforced for
@@ -71,7 +71,7 @@ Environment overrides: `LOBSTERAI_AUTH_DIR`, `LOBSTERAI_PROXY_API_KEY`,
 | `POST /v1/messages` | api_key (if set) | Anthropic Messages (stream + non-stream) |
 | `POST /v1/responses` | api_key (if set) | OpenAI Responses API for Grok Build |
 | `POST /v1/messages/count_tokens` | api_key (if set) | Conservative estimate |
-| `GET /v1/models` | api_key (if set) | Lists `deepseek-v4.1-flash` |
+| `GET /v1/models` | api_key (if set) | Lists `deepseek-flash` |
 | `GET /healthz` | public | `ok` |
 | `GET /readyz` | public | 200 when accounts loaded, else 503 |
 | `GET /admin/status` | api_key | Version, uptime, account health, counters (no secrets) |

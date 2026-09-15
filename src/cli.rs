@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "lobsterai-proxy",
     version,
-    about = "Local Anthropic + Responses API proxy backed by LobsterAI deepseek-v4.1-flash"
+    about = "Local Anthropic + Responses API proxy backed by LobsterAI deepseek-flash"
 )]
 pub struct Cli {
     /// Path to the config file (default: ./config.toml if present, built-in defaults otherwise).

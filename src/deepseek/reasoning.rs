@@ -1,4 +1,4 @@
-//! deepseek-v4.1-flash reasoning semantics.
+//! deepseek-flash reasoning semantics.
 //!
 //! Wire behavior (established from the reference implementation and live
 //! upstream responses — nothing is invented):

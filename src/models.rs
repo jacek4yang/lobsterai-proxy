@@ -1,5 +1,5 @@
 //! Model registry: this proxy exposes exactly one upstream model —
-//! `deepseek-v4.1-flash`. Client-requested model ids (Claude/Grok model
+//! `deepseek-flash`. Client-requested model ids (Claude/Grok model
 //! names, unknown ids, unset) all resolve to it; `/v1/models` lists it.
 
 use serde_json::Value;
@@ -32,7 +32,7 @@ impl ModelRegistry {
 
     pub fn definitions(&self) -> &[ModelDefinition] {
         const DEFINITIONS: [ModelDefinition; 1] = [ModelDefinition {
-            id: "deepseek-v4.1-flash",
+            id: "deepseek-flash",
             display_name: "DeepSeek v4.1 Flash (LobsterAI)",
             max_input_tokens: 131_072,
             max_output_tokens: 131_072,
@@ -69,14 +69,14 @@ mod tests {
     fn everything_resolves_to_the_served_model() {
         let registry = ModelRegistry::new();
         for requested in [
-            Some("deepseek-v4.1-flash"),
+            Some("deepseek-flash"),
             Some("claude-sonnet-4-5"),
             Some("grok-4"),
             Some(""),
             None,
         ] {
-            let resolved = registry.resolve(requested, "deepseek-v4.1-flash");
-            assert_eq!(resolved.upstream_model, "deepseek-v4.1-flash");
+            let resolved = registry.resolve(requested, "deepseek-flash");
+            assert_eq!(resolved.upstream_model, "deepseek-flash");
         }
     }
 
@@ -85,7 +85,7 @@ mod tests {
         let registry = ModelRegistry::new();
         let entry = model_list_entry(&registry.definitions()[0], "2026-01-01T00:00:00Z");
         assert_eq!(entry["type"], "model");
-        assert_eq!(entry["id"], "deepseek-v4.1-flash");
+        assert_eq!(entry["id"], "deepseek-flash");
         assert_eq!(entry["created_at"], "2026-01-01T00:00:00Z");
     }
 }

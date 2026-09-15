@@ -1,6 +1,6 @@
 # DEEPSEEK_V41_FLASH — the single served model
 
-This proxy is optimized end-to-end for `deepseek-v4.1-flash` on the
+This proxy is optimized end-to-end for `deepseek-flash` on the
 LobsterAI backend. Other client-requested model ids (Claude/Grok names)
 map to it; no other upstream model is addressed.
 

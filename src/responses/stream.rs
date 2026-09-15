@@ -862,7 +862,7 @@ mod tests {
     fn chunk(delta: Value, finish: Option<&str>, usage: Option<Value>) -> Value {
         let mut chunk = json!({
             "id": "c1",
-            "model": "deepseek-v4.1-flash",
+            "model": "deepseek-flash",
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
         });
         if let Some(usage) = usage {
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn text_stream_lifecycle_and_terminal_reconstruction() {
-        let mut converter = ResponsesConverter::new("deepseek-v4.1-flash", false);
+        let mut converter = ResponsesConverter::new("deepseek-flash", false);
         let mut out = Vec::new();
         converter.feed_chunk(&chunk(json!({"content": "Hel"}), None, None), &mut out);
         converter.feed_chunk(&chunk(json!({"content": "lo"}), None, None), &mut out);
