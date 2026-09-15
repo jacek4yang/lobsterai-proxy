@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn defaults_target_deepseek_v41_flash_on_loopback() {
         let config = Config::default();
-        assert_eq!(config.model.default, "deepseek-v4.1-flash");
+        assert_eq!(config.model.default, "deepseek-flash");
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8090);
         assert!(validate(&config).is_ok());
@@ -548,7 +548,7 @@ port = 9090
 api_key = "sk"
 
 [model]
-default = "deepseek-v4.1-flash"
+default = "deepseek-flash"
 
 [upstream]
 base_url = "https://lobsterai-server.youdao.com/"

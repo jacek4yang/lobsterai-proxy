@@ -16,7 +16,7 @@ This file defines hard rules for any AI agent developing inside
 
 ## Project targets
 
-- The ONLY upstream model is **`deepseek-v4.1-flash`**, proxied through the
+- The ONLY upstream model is **`deepseek-flash`**, proxied through the
   NetEase Youdao **LobsterAI** backend (`https://lobsterai-server.youdao.com`).
 - Target clients: **Claude Code** (Anthropic Messages API) and **Grok Build**
   (OpenAI Responses API).

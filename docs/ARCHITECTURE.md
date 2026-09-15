@@ -15,7 +15,7 @@ Claude Code / Grok Build
    |                          +- lobsterai/upstream.rs   retry invariants
    | OpenAI Chat Completions POST {base}/api/proxy/v1/chat/completions (stream=true)
    v
-[2] LobsterAI backend      deepseek-v4.1-flash
+[2] LobsterAI backend      deepseek-flash
    | OpenAI SSE
    v
 [3] server StreamPump      watchdog + pings -> protocol renderer

@@ -1,4 +1,4 @@
-//! deepseek-v4.1-flash request policy, applied to the converted OpenAI body:
+//! deepseek-flash request policy, applied to the converted OpenAI body:
 //!
 //! 1. **Reasoning epochs** — a new *human* user message starts a new epoch;
 //!    assistant tool calls and their results continue the current one.
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn estimate_anthropic_tokens_counts_everything() {
         let request = json!({
-            "model": "deepseek-v4.1-flash",
+            "model": "deepseek-flash",
             "max_tokens": 100,
             "system": "You are helpful.",
             "messages": [

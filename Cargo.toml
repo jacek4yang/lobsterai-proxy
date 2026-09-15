@@ -2,7 +2,7 @@
 name = "lobsterai-proxy"
 version = "0.1.0"
 edition = "2021"
-description = "Local Anthropic + OpenAI Responses API proxy for NetEase Youdao LobsterAI, multi-account pool with auto check-in, exclusive deepseek-v4.1-flash"
+description = "Local Anthropic + OpenAI Responses API proxy for NetEase Youdao LobsterAI, multi-account pool with auto check-in, exclusive deepseek-flash"
 license = "MIT"
 repository = "https://github.com/jacek4yang/lobsterai-proxy"
 readme = "README.md"

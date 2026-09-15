@@ -11,7 +11,7 @@ api_key = ""
 
 [model]
 # The single model this proxy serves.
-default = "deepseek-v4.1-flash"
+default = "deepseek-flash"
 
 [upstream]
 # LobsterAI backend origin.

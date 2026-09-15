@@ -369,13 +369,13 @@ mod tests {
     #[test]
     fn filter_body_forces_stream_and_usage() {
         let body = serde_json::json!({
-            "model": "deepseek-v4.1-flash",
+            "model": "deepseek-flash",
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 100,
             "metadata": {"should": "be dropped"},
             "thinking": {"type": "enabled"}
         });
-        let filtered = filter_body(&body, "deepseek-v4.1-flash");
+        let filtered = filter_body(&body, "deepseek-flash");
         assert_eq!(filtered["stream"], true);
         assert_eq!(filtered["stream_options"]["include_usage"], true);
         assert_eq!(filtered["max_tokens"], 100);

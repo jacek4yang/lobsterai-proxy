@@ -263,7 +263,7 @@ async fn messages(
         }
     };
 
-    // --- deepseek-v4.1-flash policy (lossless, prefix-stable) ---
+    // --- deepseek-flash policy (lossless, prefix-stable) ---
     let mut chat_body = converted.chat_body;
     if let Some(fp) = &session_fp {
         // Reasoning shadow restore must happen before the historical strip.
@@ -469,7 +469,7 @@ async fn responses(
         }
     };
 
-    // --- deepseek-v4.1-flash policy (shared with the Anthropic frontend) ---
+    // --- deepseek-flash policy (shared with the Anthropic frontend) ---
     let mut chat_body = converted.chat_body.clone();
     if let Some(fp) = &session_fp {
         state

@@ -1,6 +1,6 @@
 //! Bounded, memory-only reasoning shadow store.
 //!
-//! When the client did NOT request thinking, deepseek-v4.1-flash reasoning
+//! When the client did NOT request thinking, deepseek-flash reasoning
 //! for a tool loop is consumed in-turn and never surfaced to Claude Code.
 //! That keeps Claude Code history free of internal reasoning, but discards
 //! the reasoning continuity the model benefits from across a multi-step

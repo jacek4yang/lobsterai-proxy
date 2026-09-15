@@ -608,14 +608,14 @@ mod tests {
         );
         pool.load_files(&[a, b]);
         assert_eq!(pool.len(), 2);
-        let first = pool.pick(Some("sess"), "deepseek-v4.1-flash").unwrap();
-        let second = pool.pick(Some("sess"), "deepseek-v4.1-flash").unwrap();
+        let first = pool.pick(Some("sess"), "deepseek-flash").unwrap();
+        let second = pool.pick(Some("sess"), "deepseek-flash").unwrap();
         assert_eq!(
             first.uid(),
             second.uid(),
             "sticky binding keeps the account"
         );
-        let other = pool.pick(Some("other"), "deepseek-v4.1-flash").unwrap();
+        let other = pool.pick(Some("other"), "deepseek-flash").unwrap();
         let _ = other;
         let _ = std::fs::remove_dir_all(&dir);
     }
