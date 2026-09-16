@@ -1226,6 +1226,25 @@ pub async fn print_status(state: &AppState) {
             Ok(progress) => println!("      {}", progress.summary()),
             Err(err) => println!("      invitation unavailable: {err}"),
         }
+        match crate::lobsterai::checkin::fetch_credit_breakdown(
+            &http,
+            &state.config.upstream.base_url,
+            &credential,
+        )
+        .await
+        {
+            Ok(breakdown) => {
+                println!("      credits total {:.2}:", breakdown.total);
+                for item in &breakdown.items {
+                    let expires = item.expires_at.as_deref().unwrap_or("no expiry");
+                    println!(
+                        "        [{:>10}] {:.2}  {}  (expires {expires})",
+                        item.kind, item.remaining, item.label
+                    );
+                }
+            }
+            Err(err) => println!("      credit breakdown unavailable: {err}"),
+        }
     }
 }
 /// Start the proxy server with graceful shutdown and background housekeeping.
