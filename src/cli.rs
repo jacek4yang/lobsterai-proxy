@@ -37,4 +37,7 @@ pub enum Command {
     },
     /// Check the account pool, check-in and credit status without starting the server.
     Status,
+    /// Run one check-in pass over every healthy account and exit. The daily
+    /// check-in is idempotent upstream, so this is safe to run any time.
+    Checkin,
 }

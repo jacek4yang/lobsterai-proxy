@@ -24,6 +24,16 @@ async fn main() -> Result<()> {
             lobsterai_proxy::server::print_status(&state).await;
             Ok(())
         }
+        Command::Checkin => {
+            let state = lobsterai_proxy::server::build_state(config)?;
+            lobsterai_proxy::lobsterai::checkin::checkin_all(
+                &state.pool,
+                &state.http,
+                &state.config.upstream.base_url,
+            )
+            .await;
+            Ok(())
+        }
         Command::Serve { host, port } => {
             let mut config = config;
             if let Some(host) = host {
