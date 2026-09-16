@@ -238,22 +238,70 @@ pub async fn daily_checkin(
     }
 }
 
-/// Remaining credits from `GET /api/user/profile-summary`.
-pub async fn fetch_credits(
+/// One credit bucket from `creditItems` in the profile summary.
+#[derive(Debug, Clone)]
+pub struct CreditItem {
+    /// Upstream bucket type: `free`, `campaign` (daily/check-in rewards),
+    /// `invitation`, etc.
+    pub kind: String,
+    /// Human label (Chinese UI string, e.g. 新用户礼包 / 邀请奖励).
+    pub label: String,
+    pub remaining: f64,
+    /// RFC3339 expiry of the bucket, when upstream provides one.
+    pub expires_at: Option<String>,
+}
+
+/// Full credit breakdown from `GET /api/user/profile-summary`.
+#[derive(Debug, Clone)]
+pub struct CreditBreakdown {
+    pub total: f64,
+    pub items: Vec<CreditItem>,
+}
+
+/// Credits with the per-bucket breakdown from `GET /api/user/profile-summary`.
+pub async fn fetch_credit_breakdown(
     http: &reqwest::Client,
     base_url: &str,
     credential: &Credential,
-) -> Result<f64, ApiError> {
+) -> Result<CreditBreakdown, ApiError> {
     let url = format!("{base_url}/api/user/profile-summary");
-    let summary = get_json(http, &url, credential)
-        .await
-        .map_err(|e| ApiError::upstream(502, crate::redaction::sanitize_text(&e, &[])))?;
-    let credits = summary
+    let summary = get_json(http, &url, credential).await.map_err(|e| {
+        ApiError::upstream(502, crate::redaction::sanitize_text(&e.to_string(), &[]))
+    })?;
+    let total = summary
         .get("totalCreditsRemaining")
         .and_then(Value::as_f64)
         .filter(|v| *v >= 0.0)
         .ok_or_else(|| ApiError::upstream(502, "profile-summary carried no credits"))?;
-    Ok(credits)
+    let items = summary
+        .get("creditItems")
+        .and_then(Value::as_array)
+        .map(|buckets| {
+            buckets
+                .iter()
+                .filter_map(|b| {
+                    Some(CreditItem {
+                        kind: b
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        label: b
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        remaining: b.get("creditsRemaining").and_then(Value::as_f64)?,
+                        expires_at: b
+                            .get("expiresAt")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(CreditBreakdown { total, items })
 }
 
 /// Invite-program progress: the account's own invitation code (generated
@@ -418,8 +466,8 @@ pub async fn checkin_all(
             });
         }
         // Refresh learned credits (drives highest-credits-first selection).
-        if let Ok(credits) = fetch_credits(http, base_url, &credential).await {
-            pool.set_credits(&credential.uid(), credits as i64);
+        if let Ok(credits) = fetch_credit_breakdown(http, base_url, &credential).await {
+            pool.set_credits(&credential.uid(), credits.total as i64);
         }
         // Surface the account's invitation code + progress (code is what the
         // user shares to earn credits; generation is lazy/idempotent).
