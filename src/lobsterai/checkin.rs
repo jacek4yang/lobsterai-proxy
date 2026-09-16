@@ -358,9 +358,20 @@ pub async fn fetch_invite_progress(
     Ok(progress)
 }
 
+/// One account's outcome from a check-in pass, for CLI reporting.
+pub struct AccountCheckinReport {
+    pub account: String,
+    pub result: CheckinResult,
+}
+
 /// Check in every healthy account, record results, and refresh learned
-/// credits in the pool. Called by the housekeeping loop.
-pub async fn checkin_all(pool: &Arc<super::pool::Pool>, http: &reqwest::Client, base_url: &str) {
+/// credits in the pool. Called by the housekeeping loop and by the
+/// `checkin` CLI subcommand (which prints the returned reports).
+pub async fn checkin_all(
+    pool: &Arc<super::pool::Pool>,
+    http: &reqwest::Client,
+    base_url: &str,
+) -> Vec<AccountCheckinReport> {
     let credentials: Vec<Arc<Credential>> = {
         let snapshot = pool.snapshot("");
         snapshot
@@ -369,6 +380,7 @@ pub async fn checkin_all(pool: &Arc<super::pool::Pool>, http: &reqwest::Client, 
             .filter_map(|name| pool.credential_by_safe_name(name))
             .collect()
     };
+    let mut reports = Vec::new();
     for credential in credentials {
         let result = daily_checkin(http, base_url, &credential).await;
         tracing::info!(
@@ -393,7 +405,17 @@ pub async fn checkin_all(pool: &Arc<super::pool::Pool>, http: &reqwest::Client, 
                     credits = retry.credits_granted.unwrap_or(0.0),
                     "daily check-in retry after refresh"
                 );
+                reports.push(AccountCheckinReport {
+                    account: credential.safe_name.clone(),
+                    result: retry,
+                });
+                continue;
             }
+        } else {
+            reports.push(AccountCheckinReport {
+                account: credential.safe_name.clone(),
+                result: result.clone(),
+            });
         }
         // Refresh learned credits (drives highest-credits-first selection).
         if let Ok(credits) = fetch_credits(http, base_url, &credential).await {
@@ -414,6 +436,7 @@ pub async fn checkin_all(pool: &Arc<super::pool::Pool>, http: &reqwest::Client, 
             }
         }
     }
+    reports
 }
 
 #[cfg(test)]
