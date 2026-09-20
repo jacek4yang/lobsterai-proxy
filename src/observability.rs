@@ -96,6 +96,9 @@ pub struct Metrics {
     pub upstream_403: AtomicU64,
     pub upstream_429: AtomicU64,
     pub upstream_5xx: AtomicU64,
+    /// HTTP 200 responses whose stream body opened with an `event:error`
+    /// frame (the backend's in-band failure channel, e.g. quota exhausted).
+    pub upstream_200_error: AtomicU64,
     pub web_search_tool_calls: AtomicU64,
     pub web_search_errors: AtomicU64,
     pub server_tool_rounds: AtomicU64,
@@ -149,6 +152,10 @@ impl Metrics {
     }
     pub fn record_upstream_429(&self) {
         self.upstream_429.fetch_add(1, Ordering::Relaxed);
+    }
+    /// A 200 response that carried an early in-stream `event:error` frame.
+    pub fn record_upstream_200_error(&self) {
+        self.upstream_200_error.fetch_add(1, Ordering::Relaxed);
     }
     pub fn record_upstream_5xx(&self) {
         self.upstream_5xx.fetch_add(1, Ordering::Relaxed);
@@ -400,6 +407,12 @@ pub fn render(metrics: &Metrics, gauges: ScrapeGauges, version: &str, uptime_sec
         "lobsterai_proxy_transport_errors_total",
         "Upstream connection/transport failures before any response.",
         metrics.transport_errors.load(Ordering::Relaxed),
+    );
+    counter(
+        &mut out,
+        "lobsterai_proxy_upstream_200_error_total",
+        "HTTP 200 responses whose stream opened with an event:error frame.",
+        metrics.upstream_200_error.load(Ordering::Relaxed),
     );
 
     // --- server-side web search ------------------------------------------

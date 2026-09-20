@@ -30,14 +30,14 @@ pub(crate) fn responses_stream_response(
     started_at: Instant,
     summary: &mut RequestSummary,
     in_flight: InFlightGuard,
-    response: reqwest::Response,
+    response: crate::lobsterai::upstream::ByteStream,
     metrics: Arc<Metrics>,
 ) -> Response {
     let timeouts = state.timeouts;
     let (tx, rx) = tokio::sync::mpsc::channel::<PumpItem>(64);
     let (stats_tx, stats_rx) = tokio::sync::oneshot::channel::<(StreamStats, Option<String>)>();
     let shadow = state.shadow.clone();
-    let response_stream = response.bytes_stream();
+    let response_stream = response;
     let (pump_done_tx, pump_done) = tokio::sync::oneshot::channel::<()>();
     let close_watch = tx.clone();
     let pump_metrics = metrics.clone();
@@ -274,12 +274,12 @@ pub(crate) async fn aggregate_responses(
     started_at: Instant,
     summary: &mut RequestSummary,
     metrics: &Metrics,
-    response: reqwest::Response,
+    response: crate::lobsterai::upstream::ByteStream,
 ) -> Result<serde_json::Value, ApiError> {
     let mut converter = ResponsesConverter::new(&model, expose_thinking);
     let mut watch = crate::stream_watch::StreamWatch::new(timeouts, tokio::time::Instant::now());
     let mut buffer: Vec<u8> = Vec::with_capacity(8192);
-    let mut byte_stream = response.bytes_stream();
+    let mut byte_stream = response;
     let mut out: Vec<u8> = Vec::with_capacity(4096);
     loop {
         let deadline = watch.next_deadline();
