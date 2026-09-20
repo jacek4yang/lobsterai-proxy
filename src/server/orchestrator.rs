@@ -569,7 +569,7 @@ async fn responses(
             started_at,
             &mut summary,
             in_flight,
-            started_generation.response,
+            started_generation.into_byte_stream(),
             state.metrics.clone(),
         );
     }
@@ -584,7 +584,7 @@ async fn responses(
         started_at,
         &mut summary,
         &state.metrics,
-        started_generation.response,
+        started_generation.into_byte_stream(),
     )
     .await;
     summary.duration_ms = started_at.elapsed().as_millis();
@@ -896,7 +896,7 @@ fn stream_response(
     let (stats_tx, stats_rx) = tokio::sync::oneshot::channel::<(StreamStats, Option<String>)>();
     let shadow = state.shadow.clone();
     let pump_metrics = state.metrics.clone();
-    let response_stream = started.response.bytes_stream();
+    let response_stream = started.into_byte_stream();
     // The pump task owns the in-flight guard: it terminates on every path —
     // normal completion, error, AND client disconnect.
     let (pump_done_tx, pump_done) = tokio::sync::oneshot::channel::<()>();
@@ -1077,7 +1077,7 @@ async fn aggregate_response(
     metrics: &Metrics,
 ) -> Result<Value, ApiError> {
     let mut pump = StreamPump::new(expose_thinking, timeouts, started_at);
-    let mut byte_stream = started.response.bytes_stream();
+    let mut byte_stream = started.into_byte_stream();
     let mut out: Vec<u8> = Vec::with_capacity(4096);
     let shadow_pair = session_fp.clone().map(|fp| (shadow, fp));
     loop {
