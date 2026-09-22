@@ -239,8 +239,15 @@ async fn messages(
         .record_bytes_in(serde_json::to_vec(&raw_body).map(|b| b.len()).unwrap_or(0) as u64);
     let started_at = Instant::now();
     let request_id = session::request_id();
-    let session_fp = session::extract_raw_session(&raw_body)
-        .map(|raw| session::fingerprint(&state.server_secret, raw));
+    let resolved_session =
+        session::resolve_anthropic_session(&state.server_secret, &headers, &raw_body);
+    let session_fp = resolved_session
+        .as_ref()
+        .map(|resolved| resolved.fingerprint.clone());
+    let session_source = resolved_session
+        .as_ref()
+        .map(|resolved| resolved.source.to_string())
+        .unwrap_or_else(|| "none".to_owned());
     let client_stream = raw_body
         .get("stream")
         .and_then(Value::as_bool)
@@ -290,6 +297,7 @@ async fn messages(
     tracing::debug!(
         request_id = %request_id,
         session = session_fp.as_deref().unwrap_or("none"),
+        session_source = %session_source,
         prefix_hash = %prefix_hash,
         prefix_bytes,
         canonicalized_args,
@@ -1314,4 +1322,128 @@ pub async fn serve(config: crate::config::Config) -> Result<(), anyhow::Error> {
     .await;
     tracing::info!(?outcome, "server stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_events(raw: &[u8]) -> Vec<(String, Value)> {
+        String::from_utf8_lossy(raw)
+            .split("\n\n")
+            .filter_map(|block| {
+                let mut name = None;
+                let mut data = None;
+                for line in block.lines() {
+                    if let Some(value) = line.strip_prefix("event: ") {
+                        name = Some(value.to_owned());
+                    } else if let Some(value) = line.strip_prefix("data: ") {
+                        data = serde_json::from_str(value).ok();
+                    }
+                }
+                name.zip(data)
+            })
+            .collect()
+    }
+
+    fn run_fragmented_sse(raw: &[u8], expose_thinking: bool) -> Vec<(String, Value)> {
+        let mut pump = StreamPump::new(
+            expose_thinking,
+            StreamTimeouts::from_secs(0, 0, 0, 0),
+            Instant::now(),
+        );
+        let mut out = Vec::new();
+        let mut done = None;
+        // Exercise arbitrary splits inside `data:`, JSON strings, UTF-8-safe
+        // ASCII payloads, frame terminators, and `[DONE]`.
+        for byte in raw {
+            done = pump.on_bytes(std::slice::from_ref(byte), &mut out).or(done);
+        }
+        assert_eq!(done, Some(()));
+        let _ = pump.finish(None, &mut out, None);
+        parse_events(&out)
+    }
+
+    #[test]
+    fn fragmented_reasoning_and_text_sse_reconstructs_exactly_once() {
+        let upstream = concat!(
+            "data: {\"model\":\"deepseek-flash\",\"choices\":[{\"delta\":{\"reasoning_content\":\"think A\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" + B\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello, \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let events = run_fragmented_sse(upstream.as_bytes(), true);
+        let starts: Vec<&str> = events
+            .iter()
+            .filter(|(name, _)| name == "content_block_start")
+            .filter_map(|(_, value)| value["content_block"]["type"].as_str())
+            .collect();
+        assert_eq!(starts, vec!["thinking", "text"]);
+        let thinking = events
+            .iter()
+            .filter(|(_, value)| value["delta"]["type"] == "thinking_delta")
+            .filter_map(|(_, value)| value["delta"]["thinking"].as_str())
+            .collect::<String>();
+        let text = events
+            .iter()
+            .filter(|(_, value)| value["delta"]["type"] == "text_delta")
+            .filter_map(|(_, value)| value["delta"]["text"].as_str())
+            .collect::<String>();
+        assert_eq!(thinking, "think A + B");
+        assert_eq!(text, "Hello, world");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(name, _)| name == "message_stop")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(name, _)| name == "message_delta")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn fragmented_reasoning_and_parallel_tools_have_valid_block_order() {
+        let upstream = concat!(
+            "data: {\"model\":\"deepseek-flash\",\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"pa\"}},{\"index\":1,\"id\":\"b\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"a\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"th\\\":\\\"b\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let events = run_fragmented_sse(upstream.as_bytes(), true);
+        let starts: Vec<&str> = events
+            .iter()
+            .filter(|(name, _)| name == "content_block_start")
+            .filter_map(|(_, value)| value["content_block"]["type"].as_str())
+            .collect();
+        assert_eq!(starts, vec!["thinking", "tool_use", "tool_use"]);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(name, _)| name == "content_block_stop")
+                .count(),
+            3
+        );
+        let terminal = events
+            .iter()
+            .find(|(name, _)| name == "message_delta")
+            .unwrap();
+        assert_eq!(terminal.1["delta"]["stop_reason"], "tool_use");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(name, _)| name == "message_stop")
+                .count(),
+            1
+        );
+    }
 }

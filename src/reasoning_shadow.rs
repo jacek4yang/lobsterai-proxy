@@ -297,9 +297,22 @@ impl ReasoningShadowStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
 
     fn store() -> ReasoningShadowStore {
         ReasoningShadowStore::new(ShadowLimits::default())
+    }
+
+    fn pi_session_fingerprint(raw: &'static str) -> String {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-session-affinity", HeaderValue::from_static(raw));
+        crate::session::resolve_anthropic_session(
+            b"test-server-secret",
+            &headers,
+            &serde_json::json!({}),
+        )
+        .expect("Pi affinity header resolves")
+        .fingerprint
     }
 
     #[test]
@@ -419,6 +432,99 @@ mod tests {
         });
         shadow.restore_into(body.as_object_mut().unwrap(), "other");
         assert!(body["messages"][1].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn pi_session_shadow_survives_sequential_tool_loop_and_final_cleanup() {
+        let shadow = store();
+        let session = pi_session_fingerprint("pi-tool-loop");
+
+        shadow.store(&session, &["call_a".into()], "reason A");
+        let mut after_a = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_a", "type": "function", "function": {"name": "Read", "arguments": "{}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_a", "content": "A result"}
+            ]
+        });
+        shadow.restore_into(after_a.as_object_mut().unwrap(), &session);
+        assert_eq!(after_a["messages"][1]["reasoning_content"], "reason A");
+
+        shadow.store(&session, &["call_b".into()], "reason B");
+        let mut after_b = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_a", "type": "function", "function": {"name": "Read", "arguments": "{}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_a", "content": "A result"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_b", "type": "function", "function": {"name": "Edit", "arguments": "{}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_b", "content": "B result"}
+            ]
+        });
+        shadow.restore_into(after_b.as_object_mut().unwrap(), &session);
+        assert_eq!(after_b["messages"][1]["reasoning_content"], "reason A");
+        assert_eq!(after_b["messages"][3]["reasoning_content"], "reason B");
+
+        shadow.clear_session(&session);
+        let mut after_final = after_b.clone();
+        after_final["messages"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("reasoning_content");
+        after_final["messages"][3]
+            .as_object_mut()
+            .unwrap()
+            .remove("reasoning_content");
+        shadow.restore_into(after_final.as_object_mut().unwrap(), &session);
+        assert!(after_final["messages"][1]
+            .get("reasoning_content")
+            .is_none());
+        assert!(after_final["messages"][3]
+            .get("reasoning_content")
+            .is_none());
+    }
+
+    #[test]
+    fn pi_parallel_calls_share_reasoning_and_new_human_turn_does_not_restore_it() {
+        let shadow = store();
+        let session = pi_session_fingerprint("pi-parallel-loop");
+        shadow.store(
+            &session,
+            &["call_a".into(), "call_b".into()],
+            "parallel reasoning",
+        );
+        let mut parallel = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_a", "type": "function", "function": {"name": "Read", "arguments": "{}"}},
+                    {"id": "call_b", "type": "function", "function": {"name": "Read", "arguments": "{}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_a", "content": "A"},
+                {"role": "tool", "tool_call_id": "call_b", "content": "B"}
+            ]
+        });
+        shadow.restore_into(parallel.as_object_mut().unwrap(), &session);
+        assert_eq!(
+            parallel["messages"][1]["reasoning_content"],
+            "parallel reasoning"
+        );
+
+        parallel["messages"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("reasoning_content");
+        parallel["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"role": "user", "content": "new instruction"}));
+        shadow.restore_into(parallel.as_object_mut().unwrap(), &session);
+        assert!(parallel["messages"][1].get("reasoning_content").is_none());
     }
 
     #[test]

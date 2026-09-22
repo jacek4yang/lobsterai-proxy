@@ -694,6 +694,23 @@ mod tests {
     }
 
     #[test]
+    fn stream_error_prefix_is_safe_at_every_byte_boundary() {
+        let raw = b"event:error\ndata:{\"type\":\"error\",\"error\":{\"message\":\"quota\",\"code\":40201}}\n\n";
+        for split in 1..raw.len() {
+            assert!(
+                scan_prefix_for_stream_error(&raw[..split]).is_none(),
+                "incomplete prefix at byte {split} must remain undecided"
+            );
+            let mut accumulated = raw[..split].to_vec();
+            accumulated.extend_from_slice(&raw[split..]);
+            let (error, consumed) = scan_prefix_for_stream_error(&accumulated)
+                .expect("complete fragmented frame is detected");
+            assert!(error.is_quota_exhausted());
+            assert_eq!(consumed, raw.len());
+        }
+    }
+
+    #[test]
     fn stream_error_after_semantic_data_is_not_a_pre_output_failure() {
         // Once real content has streamed, a later error frame must not be
         // treated as retry-safe (the no-replay invariant).

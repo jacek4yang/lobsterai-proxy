@@ -62,6 +62,7 @@ pub struct StreamConverter {
     finish_reason: Option<String>,
     usage: Option<(u64, u64, u64)>,
     model: Option<String>,
+    finished: bool,
 }
 
 impl StreamConverter {
@@ -81,6 +82,7 @@ impl StreamConverter {
             finish_reason: None,
             usage: None,
             model: None,
+            finished: false,
         }
     }
 
@@ -128,6 +130,9 @@ impl StreamConverter {
     /// Feed one parsed OpenAI SSE chunk; append emitted events to `out`.
     /// Returns true when the chunk carried semantic progress.
     pub fn feed_chunk(&mut self, chunk: &Value, out: &mut Vec<u8>) -> bool {
+        if self.finished {
+            return false;
+        }
         let mut semantic = false;
         if let Some(model) = chunk.get("model").and_then(Value::as_str) {
             self.model = Some(model.to_owned());
@@ -346,13 +351,17 @@ impl StreamConverter {
     }
 
     /// Emit all trailing events: close open blocks, message_delta, message_stop.
-    /// Appends to `out`; safe to call once per stream.
+    /// Appends to `out`; repeated calls are harmless.
     pub fn finish(&mut self, out: &mut Vec<u8>) {
         let stop_reason = stop_reason_from_finish(self.finish_reason.as_deref());
         self.finish_with_stop(out, stop_reason);
     }
 
     fn finish_with_stop(&mut self, out: &mut Vec<u8>, stop_reason: &str) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
         if self.thinking_open {
             self.close_thinking(out);
         }
@@ -699,5 +708,51 @@ mod tests {
         converter.finish(&mut out);
         let accumulated = converter.accumulated();
         assert_eq!(accumulated.usage, Some((4, 4, 6)));
+    }
+
+    #[test]
+    fn finalization_and_post_finish_input_are_idempotent() {
+        let mut converter = StreamConverter::new(true);
+        let mut out = Vec::new();
+        converter.feed_chunk(
+            &chunk(json!({"reasoning_content": "think"}), None, None),
+            &mut out,
+        );
+        converter.feed_chunk(
+            &chunk(json!({"content": "answer"}), Some("stop"), None),
+            &mut out,
+        );
+        converter.finish(&mut out);
+        let length_after_finish = out.len();
+        converter.finish(&mut out);
+        assert!(!converter.feed_chunk(
+            &chunk(json!({"content": "duplicate"}), Some("stop"), None),
+            &mut out,
+        ));
+        assert_eq!(out.len(), length_after_finish);
+
+        let events = parse_events(&out);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(name, _)| name == "message_stop")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(name, _)| name == "message_delta")
+                .count(),
+            1
+        );
+        let visible_text = events
+            .iter()
+            .filter(|(name, value)| {
+                name == "content_block_delta" && value["delta"]["type"] == "text_delta"
+            })
+            .filter_map(|(_, value)| value["delta"]["text"].as_str())
+            .collect::<String>();
+        assert_eq!(visible_text, "answer");
     }
 }

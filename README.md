@@ -3,13 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A local, single-binary Rust proxy that exposes the **Anthropic Messages API**
-(for [Claude Code](https://claude.com/claude-code)) and the **OpenAI Responses
-API** (for [Grok Build](https://github.com/xai-org/grok-build)) and translates
-both to the **NetEase Youdao LobsterAI** backend, proxying **exclusively
-`deepseek-flash`**.
+(for [Claude Code](https://claude.com/claude-code) and Pi Coding Agent) and the
+**OpenAI Responses API** (for [Grok Build](https://github.com/xai-org/grok-build))
+and translates both to the **NetEase Youdao LobsterAI** backend, proxying
+**exclusively `deepseek-flash`**.
 
 ```
-Claude Code                      Grok Build
+Claude Code / Pi                 Grok Build
    │ Anthropic Messages API         │ OpenAI Responses API
    │ (SSE)                          │ (SSE)
    ▼                                ▼
