@@ -568,6 +568,7 @@ pub fn seed_from_dirs(managed_dir: &Path, sources: &[PathBuf]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
     use serde_json::json;
 
     fn make_credential(dir: &Path, uid: &str) -> PathBuf {
@@ -594,6 +595,14 @@ mod tests {
         path
     }
 
+    fn pi_session_fingerprint(raw: &'static str) -> String {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-session-affinity", HeaderValue::from_static(raw));
+        crate::session::resolve_anthropic_session(b"s", &headers, &json!({}))
+            .expect("Pi affinity header resolves")
+            .fingerprint
+    }
+
     #[test]
     fn picks_credentials_and_binds_sticky() {
         let dir = tempdir("bind");
@@ -617,6 +626,37 @@ mod tests {
         );
         let other = pool.pick(Some("other"), "deepseek-flash").unwrap();
         let _ = other;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn independent_sessions_rebind_when_sticky_account_cools() {
+        let dir = tempdir("session-rebind");
+        let a = make_credential(&dir, "u-a");
+        let b = make_credential(&dir, "u-b");
+        let pool = Pool::new(b"s".to_vec(), LimitConfig::default());
+        pool.load_files(&[a, b]);
+        let session_a = pi_session_fingerprint("pi-session-a");
+        let session_b = pi_session_fingerprint("pi-session-b");
+
+        let session_a_first = pool.pick(Some(&session_a), "deepseek-flash").unwrap();
+        let session_a_again = pool.pick(Some(&session_a), "deepseek-flash").unwrap();
+        assert_eq!(session_a_first.uid(), session_a_again.uid());
+
+        let session_b_credential = pool.pick(Some(&session_b), "deepseek-flash").unwrap();
+        assert_ne!(
+            session_a_first.uid(),
+            session_b_credential.uid(),
+            "different sessions acquire independent round-robin affinity"
+        );
+
+        pool.note_status(&session_a_first, 429, "deepseek-flash", b"");
+        let rebound = pool.pick(Some(&session_a), "deepseek-flash").unwrap();
+        assert_ne!(session_a_first.uid(), rebound.uid());
+        assert_eq!(
+            rebound.uid(),
+            pool.pick(Some(&session_a), "deepseek-flash").unwrap().uid()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

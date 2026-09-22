@@ -1,10 +1,32 @@
-# Anthropic Messages API (Claude Code)
+# Anthropic Messages API (Claude Code and Pi)
 
 `POST /v1/messages` speaks the Anthropic Messages wire protocol for Claude
-Code (streaming and non-streaming). `POST /v1/messages/count_tokens`
+Code and Pi Coding Agent (streaming and non-streaming).
+`POST /v1/messages/count_tokens`
 returns a deliberately conservative estimate (header
 `x-lobsterai-proxy-token-count: estimated-deepseek`); it is never presented
 as exact.
+
+## Session identity
+
+The frontend resolves one opaque session hint in this order:
+
+1. `metadata.user_id`;
+2. `metadata.session_id`;
+3. `x-session-affinity`;
+4. `x-session-id`.
+
+Body metadata keeps the existing Claude Code precedence. Pi 0.87.0 uses
+`x-session-affinity` when its Anthropic compatibility setting enables session
+affinity, or `x-session-id` for its OpenRouter affinity format. For a custom
+Anthropic provider without that setting, Pi 0.87.0 sends no session identity;
+the proxy does not invent one from the user agent, connection, or source IP.
+
+Accepted values are non-empty and at most 512 bytes. The raw value is never
+logged or forwarded to LobsterAI. It is immediately converted to the existing
+secret-keyed Anthropic session fingerprint used by account stickiness,
+conversation IDs, and the reasoning shadow. Responses API identities remain
+in a separate fingerprint domain.
 
 ## Conversion rules
 

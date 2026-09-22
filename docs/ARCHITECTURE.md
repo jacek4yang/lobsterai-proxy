@@ -4,7 +4,7 @@ One logical request flows through four stages; every stage is deterministic
 and side-effect free except for the marked persistence points.
 
 ```
-Claude Code / Grok Build
+Claude Code / Pi / Grok Build
    | POST /v1/messages (Anthropic)        POST /v1/responses (Responses API)
    v
 [1] server/orchestrator.rs    auth -> parse -> convert -> policy -> generate
@@ -24,7 +24,7 @@ Claude Code / Grok Build
    |                          +- accumulation (usage, tool args, reasoning)
    |                          +- shadow store/clear on finish
    v
-[4] Claude Code / Grok Build
+[4] Claude Code / Pi / Grok Build
 ```
 
 ## Modules

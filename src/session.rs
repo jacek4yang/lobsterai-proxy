@@ -1,25 +1,100 @@
 //! Session identity: extraction, HMAC fingerprinting, and stable upstream
 //! conversation IDs. Raw session identifiers are never logged or forwarded.
 
+use axum::http::HeaderMap;
 use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value;
 use sha2::Sha256;
+use std::fmt;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Raw session identity from an Anthropic request, in priority order:
-/// 1. `metadata.user_id` — Claude Code formats it as `<user>_<account>_session_<id>`.
-/// 2. `metadata.session_id` when present.
-///
-/// `None` when neither is present: without a stable identity there is no
-/// session-scoped behavior (never guessed from IP, connection, or recency).
-pub fn extract_raw_session(request: &Value) -> Option<&str> {
-    let metadata = request.get("metadata")?.as_object()?;
-    metadata
-        .get("user_id")
+/// Client-controlled session hints are deliberately small. The accepted value
+/// is HMACed immediately, but bounding it also keeps request processing costs
+/// predictable and rejects accidental payloads in affinity headers.
+pub const MAX_CLIENT_SESSION_BYTES: usize = 512;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionSource {
+    AnthropicMetadataUser,
+    AnthropicMetadataSession,
+    SessionAffinityHeader,
+    SessionIdHeader,
+}
+
+impl fmt::Display for SessionSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::AnthropicMetadataUser => "anthropic_metadata_user",
+            Self::AnthropicMetadataSession => "anthropic_metadata_session",
+            Self::SessionAffinityHeader => "session_affinity_header",
+            Self::SessionIdHeader => "session_id_header",
+        })
+    }
+}
+
+/// A session identity safe for internal state and logs. The raw client value
+/// never leaves the resolver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSession {
+    pub fingerprint: String,
+    pub source: SessionSource,
+}
+
+fn valid_session_hint(value: &str) -> Option<&str> {
+    (!value.is_empty() && value.len() <= MAX_CLIENT_SESSION_BYTES).then_some(value)
+}
+
+fn metadata_session<'a>(request: &'a Value, field: &str) -> Option<&'a str> {
+    request
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get(field))
         .and_then(Value::as_str)
-        .or_else(|| metadata.get("session_id").and_then(Value::as_str))
-        .filter(|id| !id.is_empty())
+        .and_then(valid_session_hint)
+}
+
+fn header_session<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(valid_session_hint)
+}
+
+/// Resolve an Anthropic frontend session in deterministic priority order:
+///
+/// 1. `metadata.user_id` (existing Claude Code behavior);
+/// 2. `metadata.session_id`;
+/// 3. `x-session-affinity` (Pi's standard affinity format);
+/// 4. `x-session-id` (Pi's OpenRouter affinity format).
+///
+/// All Anthropic sources intentionally share the existing session fingerprint
+/// domain. A client may change between the two Pi header formats without
+/// losing continuity, while the Responses frontend remains separately
+/// domain-separated by its caller. These headers are opaque affinity hints;
+/// they never authorize requests or select an account directly.
+pub fn resolve_anthropic_session(
+    secret: &[u8],
+    headers: &HeaderMap,
+    request: &Value,
+) -> Option<ResolvedSession> {
+    let (raw, source) = metadata_session(request, "user_id")
+        .map(|raw| (raw, SessionSource::AnthropicMetadataUser))
+        .or_else(|| {
+            metadata_session(request, "session_id")
+                .map(|raw| (raw, SessionSource::AnthropicMetadataSession))
+        })
+        .or_else(|| {
+            header_session(headers, "x-session-affinity")
+                .map(|raw| (raw, SessionSource::SessionAffinityHeader))
+        })
+        .or_else(|| {
+            header_session(headers, "x-session-id").map(|raw| (raw, SessionSource::SessionIdHeader))
+        })?;
+    Some(ResolvedSession {
+        fingerprint: fingerprint(secret, raw),
+        source,
+    })
 }
 
 /// HMAC-SHA256(server-secret, raw session id), rendered as 16 lowercase hex
@@ -101,19 +176,90 @@ pub fn request_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
     use serde_json::json;
 
     #[test]
-    fn raw_session_prefers_user_id_and_fails_safe() {
-        let request = json!({"metadata": {"user_id": "user_x_session_a", "session_id": "sid_b"}});
-        assert_eq!(extract_raw_session(&request), Some("user_x_session_a"));
-        let request = json!({"metadata": {"session_id": "sid_b"}});
-        assert_eq!(extract_raw_session(&request), Some("sid_b"));
+    fn claude_metadata_precedence_and_fingerprint_stay_stable() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-session-affinity", HeaderValue::from_static("pi-session"));
+        headers.insert("x-session-id", HeaderValue::from_static("pi-openrouter"));
+        let request = json!({
+            "metadata": {"user_id": "user_x_session_a", "session_id": "sid_b"}
+        });
+        let resolved = resolve_anthropic_session(b"secret", &headers, &request).unwrap();
+        assert_eq!(resolved.source, SessionSource::AnthropicMetadataUser);
         assert_eq!(
-            extract_raw_session(&json!({"metadata": {"user_id": ""}})),
+            resolved.fingerprint,
+            fingerprint(b"secret", "user_x_session_a")
+        );
+
+        let resolved = resolve_anthropic_session(
+            b"secret",
+            &headers,
+            &json!({"metadata": {"session_id": "sid_b"}}),
+        )
+        .unwrap();
+        assert_eq!(resolved.source, SessionSource::AnthropicMetadataSession);
+        assert_eq!(resolved.fingerprint, fingerprint(b"secret", "sid_b"));
+    }
+
+    #[test]
+    fn pi_affinity_headers_are_stable_and_have_deterministic_precedence() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-session-affinity", HeaderValue::from_static("pi-session"));
+        headers.insert("x-session-id", HeaderValue::from_static("pi-openrouter"));
+        let first = resolve_anthropic_session(b"secret", &headers, &json!({})).unwrap();
+        let second = resolve_anthropic_session(b"secret", &headers, &json!({})).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.source, SessionSource::SessionAffinityHeader);
+        assert_eq!(first.fingerprint, fingerprint(b"secret", "pi-session"));
+
+        headers.remove("x-session-affinity");
+        let fallback = resolve_anthropic_session(b"secret", &headers, &json!({})).unwrap();
+        assert_eq!(fallback.source, SessionSource::SessionIdHeader);
+        assert_eq!(
+            fallback.fingerprint,
+            fingerprint(b"secret", "pi-openrouter")
+        );
+
+        headers.insert("x-session-id", HeaderValue::from_static("pi-session"));
+        let same_logical_session =
+            resolve_anthropic_session(b"secret", &headers, &json!({})).unwrap();
+        assert_eq!(same_logical_session.fingerprint, first.fingerprint);
+    }
+
+    #[test]
+    fn installed_pi_default_shape_has_no_invented_session() {
+        // Pi 0.87.0 omits metadata and affinity headers for custom Anthropic
+        // providers unless its sendSessionAffinityHeaders compatibility option
+        // is enabled. Standard SDK headers must not become a global fallback.
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", HeaderValue::from_static("pi/0.87.0"));
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+        assert_eq!(
+            resolve_anthropic_session(b"secret", &headers, &json!({})),
             None
         );
-        assert_eq!(extract_raw_session(&json!({})), None);
+    }
+
+    #[test]
+    fn invalid_or_oversized_sources_are_ignored_without_aliasing() {
+        let oversized = "x".repeat(MAX_CLIENT_SESSION_BYTES + 1);
+        let request = json!({"metadata": {"user_id": oversized, "session_id": "valid"}});
+        let resolved = resolve_anthropic_session(b"secret", &HeaderMap::new(), &request).unwrap();
+        assert_eq!(resolved.source, SessionSource::AnthropicMetadataSession);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-session-affinity", HeaderValue::from_static(""));
+        headers.insert(
+            "x-session-id",
+            HeaderValue::from_bytes(&[0xff, 0xfe]).expect("opaque header value"),
+        );
+        assert_eq!(
+            resolve_anthropic_session(b"secret", &headers, &json!({})),
+            None
+        );
     }
 
     #[test]
